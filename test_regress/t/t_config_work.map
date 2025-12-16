@@ -7,4 +7,5 @@
 
 //    lib.map file:
 
-library nonelib none.sv, none*.sv, none/; // no matches
+library nonelibv none.v, none*.v, none/v/; // no matches
+library nonelibsv none.sv, none*.sv, none/sv/; // no matches
