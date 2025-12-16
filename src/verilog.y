@@ -433,6 +433,8 @@ BISONPRE_VERSION(3.7,%define api.header.include {"V3ParseBison.h"})
 %token<fl>              yIMPLEMENTS     "implements"
 %token<fl>              yIMPLIES        "implies"
 %token<fl>              yIMPORT         "import"
+%token<fl>              yINCDIR         "incdir"
+%token<fl>              yINCLUDE        "include"
 %token<fl>              yINITIAL        "initial"
 %token<fl>              yINOUT          "inout"
 %token<fl>              yINPUT          "input"
@@ -448,6 +450,7 @@ BISONPRE_VERSION(3.7,%define api.header.include {"V3ParseBison.h"})
 %token<fl>              yJOIN_NONE      "join_none"
 %token<fl>              yLET            "let"
 %token<fl>              yLIBLIST        "liblist"
+%token<fl>              yLIBRARY        "library"
 %token<fl>              yLOCALPARAM     "localparam"
 %token<fl>              yLOCAL__COLONCOLON "local-then-::"
 %token<fl>              yLOCAL__ETC     "local"
@@ -1028,6 +1031,9 @@ descriptionList:                // IEEE: part of source_text
 description:                    // ==IEEE: description
                 module_declaration                      { }
         //                      // udp_declaration moved into module_declaration
+        //                      // library_declaration and include_statement moved from library_description
+        |       library_declaration                     { PARSEP->rootp()->addMiscsp($1); }
+        |       include_statement                       { }
         |       interface_declaration                   { }
         |       program_declaration                     { }
         |       package_declaration                     { }
@@ -3583,8 +3589,14 @@ statement_item<nodeStmtp>:          // IEEE: statement_item
                           newfl->warnOff(V3ErrorCode::IGNOREDRETURN, true);
                           $6->fileline(newfl);
                           $$ = exprp->makeStmt(); }
-        |       yVOID yP_TICK '(' system_t_call ')' ';'
-                        { $$ = $4;
+        |       yVOID yP_TICK '(' system_f_only_expr_call ')' ';'
+                        { $$ = new AstStmtExpr{$<fl>4, $4};
+                          FileLine* const newfl = new FileLine{$$->fileline()};
+                          newfl->warnOff(V3ErrorCode::IGNOREDRETURN, true);
+                          $$->fileline(newfl); }
+        //                      // Any system function as a task
+        |       yVOID yP_TICK '(' system_f_or_t_expr_call ')' ';'
+                        { $$ = new AstStmtExpr{$<fl>4, $4};
                           FileLine* const newfl = new FileLine{$$->fileline()};
                           newfl->warnOff(V3ErrorCode::IGNOREDRETURN, true);
                           $$->fileline(newfl); }
@@ -4064,7 +4076,9 @@ task_subroutine_callNoSemi<nodeStmtp>:  // similar to IEEE task_subroutine_call 
         //                      // Expr here must result in a subroutine_call
                 task_subroutine_callNoMethod            { $$ = $1->makeStmt(); }
         |       fexpr '.' task_subroutine_callNoMethod  { $$ = (new AstDot{$<fl>2, false, $1, $3})->makeStmt(); }
-        |       system_t_call                           { $$ = $1; }
+        |       system_t_stmt_call                      { $$ = $1; }
+        //                      // Any system function as a task
+        |       system_f_or_t_expr_call                 { $$ = new AstStmtExpr{$<fl>1, $1}; }
         //                      // Not here in IEEE; from class_constructor_declaration
         //                      // Because we've joined class_constructor_declaration into generic functions
         //                      // Way over-permissive;
@@ -4094,7 +4108,8 @@ function_subroutine_callNoMethod<nodeExprp>:        // IEEE: function_subroutine
         |       funcRef yWITH__PAREN '(' expr ')'       { $$ = new AstWithParse{$2, $1, $4}; }
         //                      // can call as method and yWITH without parenthesis
         |       id yWITH__PAREN '(' expr ')'            { $$ = new AstWithParse{$2, new AstFuncRef{$<fl>1, *$1, nullptr}, $4}; }
-        |       system_f_call                           { $$ = $1; }
+        |       system_f_only_expr_call                 { $$ = $1; }
+        |       system_f_or_t_expr_call                 { $$ = $1; }
         //                      // IEEE: method_call requires a "." so is in expr
         //                      // IEEE: ['std::'] not needed, as normal std package resolution will find it
         //                      // IEEE: randomize_call
@@ -4104,7 +4119,7 @@ function_subroutine_callNoMethod<nodeExprp>:        // IEEE: function_subroutine
         |       funcRef yWITH__PAREN_CUR '(' expr ')' constraint_block   { $$ = new AstWithParse{$2, $1, $4, $6}; }
         ;
 
-system_t_call<nodeStmtp>:       // IEEE: system_tf_call (as task)
+system_t_stmt_call<nodeStmtp>:  // IEEE: part of system_tf_call (as task returning statement)
         //
                 yaD_PLI systemDpiArgsE                  { AstTaskRef* const refp = new AstTaskRef{$<fl>1, *$1, $2};
                                                           refp->pli(true);
@@ -4291,12 +4306,9 @@ system_t_call<nodeStmtp>:       // IEEE: system_tf_call (as task)
                           fl_nowarn->warnOff(V3ErrorCode::WIDTH, true);
                           $$ = new AstAssertIntrinsic{fl_nowarn, new AstCastDynamic{fl_nowarn, $5, $3},
                                                       nullptr, nullptr}; }
-        //
-        // Any system function as a task
-        |       system_f_call_or_t                      { $$ = new AstStmtExpr{$<fl>1, $1}; }
         ;
 
-system_f_call<nodeExprp>:           // IEEE: system_tf_call (as func)
+system_f_only_expr_call<nodeExprp>:  // IEEE: part of system_tf_call (for functions returning expressions)
                 yaD_PLI systemDpiArgsE                  { $$ = new AstFuncRef{$<fl>1, *$1, $2}; VN_CAST($$, FuncRef)->pli(true); }
         //
         |       yD_C '(' cStrList ')' {
@@ -4318,16 +4330,9 @@ system_f_call<nodeExprp>:           // IEEE: system_tf_call (as func)
         |       yD_CAST '(' expr ',' expr ')'           { $$ = new AstCastDynamic{$1, $5, $3}; }
         |       yD_STACKTRACE parenE                    { $$ = new AstStackTraceF{$1}; }
         |       yD_SYSTEM  '(' expr ')'                 { $$ = new AstSystemF{$1, $3}; }
-        //
-        |       system_f_call_or_t                      { $$ = $1; }
         ;
 
-systemDpiArgsE<argp>:           // IEEE: part of system_if_call for arguments of $dpi call
-                parenE                                  { $$ = nullptr; }
-        |       '(' exprList ')'                        { $$ = GRAMMARP->argWrapList($2); }
-        ;
-
-system_f_call_or_t<nodeExprp>:      // IEEE: part of system_tf_call (can be task or func)
+system_f_or_t_expr_call<nodeExprp>:  // IEEE: part of system_tf_call (can be task or func)
                 yD_ACOS '(' expr ')'                    { $$ = new AstAcosD{$1, $3}; }
         |       yD_ACOSH '(' expr ')'                   { $$ = new AstAcoshD{$1, $3}; }
         |       yD_ASIN '(' expr ')'                    { $$ = new AstAsinD{$1, $3}; }
@@ -4481,6 +4486,11 @@ severity_system_task_guts<nodep>:    // IEEE: part of severity_system_task (1800
         |       yD_FATAL parenE                         { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, nullptr}; }
         |       yD_FATAL '(' expr ')'                   { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, nullptr}; DEL($3); }
         |       yD_FATAL '(' expr ',' exprListE ')'     { $$ = new AstElabDisplay{$1, VDisplayType::DT_FATAL, $5}; DEL($3); }
+        ;
+
+systemDpiArgsE<argp>:           // IEEE: part of system_if_call for arguments of $dpi call
+                parenE                                  { $$ = nullptr; }
+        |       '(' exprList ')'                        { $$ = GRAMMARP->argWrapList($2); }
         ;
 
 property_actual_arg<nodeExprp>:  // ==IEEE: property_actual_arg
@@ -7995,33 +8005,26 @@ colonConfigE<cbool>:  // IEEE: [ ':' yCONFIG]
 //**********************************************************************
 // Config - lib.map
 //
-// TODO when implement this support, add -libmap option which takes multiple files.
 
-//UNSUP library_text:  // == IEEE: library_text (note is top-level entry point)
-//UNSUP         library_description                     { }
-//UNSUP |       library_text library_description        { }
-//UNSUP ;
-
-//UNSUP library_description:  // == IEEE: library_description
-//UNSUP //                      // IEEE: library_declaration
-//UNSUP         yLIBRARY idAny/*library_identifier*/ file_path_specList ';'
-//UNSUP                 { BBUNSUP($<fl>1, "Unsupported: config lib.map library"); }
-//UNSUP         yLIBRARY idAny/*library_identifier*/ file_path_specList '-' yINCDIR file_path_specList ';'
-//UNSUP                 { BBUNSUP($<fl>1, "Unsupported: config lib.map library"); }
-//UNSUP //                      // IEEE: include_statement
-//UNSUP |       yINCLUDE file_path_spec ';'             { BBUNSUP($<fl>1, "Unsupported: config include"); }
-//UNSUP |       config_declaration                      { }
-//UNSUP |       ';'                                     { }
-//UNSUP ;
-
-//UNSUP file_path_specList:  // IEEE: file_path_spec { ',' file_path_spec }
-//UNSUP         file_path_spec                          { }
-//UNSUP |       file_path_specList ',' file_path_spec   { }
-//UNSUP ;
-
-//UNSUP file_path_spec:  // IEEE: file_path_spec
-//UNSUP         Needs to be lexer rule, Note '/' '*' must not be a comment.
-//UNSUP ;
+library_declaration<nodep>:  // IEEE: library_declaration
+                yLIBRARY yaSTRING file_path_specList incdirE ';'
+                        { $$ = new AstLibrary{$<fl>1, *$2, $3, $4}; }
+        ;
+incdirE<nodeExprp>:  // IEEE: [ '-' yINCDIR file_path_specList ';']
+                /* empty */                             { $$ = nullptr; }
+                                // https://accellera.mantishub.io/view.php?id=1166
+        |       yINCDIR file_path_specList              { $$ = nullptr; BBUNSUP($<fl>1, "Unsupported: config incdir"); }
+        ;
+include_statement<nodep>:  // IEEE: include_statement
+                yINCLUDE file_path_spec ';'             { $$ = nullptr; BBUNSUP($<fl>1, "Unsupported: config include"); }
+        ;
+file_path_specList<nodeExprp>:  // IEEE: file_path_spec { ',' file_path_spec }
+                file_path_spec                          { $$ = $1; }
+        |       file_path_specList ',' file_path_spec   { $$ = addNextNull($1, $3); }
+        ;
+file_path_spec<nodeExprp>:  // IEEE: file_path_spec
+                yaSTRING { $$ = new AstParseRef{$<fl>1, *$1}; }
+        ;
 
 //**********************************************************************
 // VLT Files

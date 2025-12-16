@@ -1,0 +1,11 @@
+// -*- Verilog -*-
+// DESCRIPTION: Verilator: Verilog Test module
+//
+// This file ONLY is placed under the Creative Commons Public Domain, for
+// any use, without warranty, 2025 by Wilson Snyder.
+// SPDX-License-Identifier: CC0-1.0
+
+//    lib.map file:
+
+library nonelibv none.v, none*.v, none/v/; // no matches
+library nonelibsv none.sv, none*.sv, none/sv/; // no matches
